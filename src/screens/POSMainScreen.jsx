@@ -10,7 +10,10 @@ import ReceiptModal     from '../components/ReceiptModal';
 import RefundModal      from '../components/RefundModal';
 import ParkedSalesModal from '../components/ParkedSalesModal';
 import ShiftManager     from './ShiftManager';
-import { queueOfflineSale, getUnsyncedSales, markSynced, removeQueuedSale, unsyncedCount } from '../db/offlineDb';
+import {
+  queueOfflineSale, getUnsyncedSales, markSynced, removeQueuedSale, unsyncedCount,
+  markFailed, getFailedSales, failedCount, clearFailedFlag,
+} from '../db/offlineDb';
 
 const fmtCur = (n) =>
   `GH₵ ${parseFloat(n||0).toFixed(2)}`;
@@ -45,11 +48,45 @@ export default function POSMainScreen({
   const [isOnline,      setIsOnline]      = useState(navigator.onLine);
   const [pendingSync,   setPendingSync]   = useState(0);
   const [syncing,       setSyncing]       = useState(false);
+  const [failedSyncCount, setFailedSyncCount] = useState(0);
+  const [showFailedSync,  setShowFailedSync]  = useState(false);
+  const [failedSales,     setFailedSales]     = useState([]);
 
   const authH = { Authorization: `Bearer ${token}` };
 
   const refreshPendingCount = useCallback(() => {
     unsyncedCount().then(setPendingSync).catch(() => {});
+    failedCount().then(setFailedSyncCount).catch(() => {});
+  }, []);
+
+  const refreshFailedSales = useCallback(() => {
+    getFailedSales().then(setFailedSales).catch(() => {});
+  }, []);
+
+  // Mirrors, locally, exactly what the server would deduct once this
+  // sale actually reaches it — the grid otherwise stays frozen at
+  // pre-outage quantities for as long as the terminal is offline, so
+  // a cashier ringing up the same item twice sees no warning that
+  // they're about to (or already did) oversell it. This is a
+  // best-effort local estimate, not a new source of truth: the
+  // server's own atomic stock check on sync is still what actually
+  // decides whether the sale is valid.
+  const applyOptimisticStockDecrement = useCallback((cartItems) => {
+    setProducts(prev => {
+      const next = prev.map(p => ({ ...p, variants: p.variants ? p.variants.map(v => ({ ...v })) : p.variants }));
+      for (const item of cartItems) {
+        const product = next.find(p => p.id === item.productId);
+        if (!product) continue;
+        if (item.variantId && product.variants) {
+          const variant = product.variants.find(v => v.id === item.variantId);
+          if (variant) variant.quantity_on_hand = Math.max(0, parseFloat(variant.quantity_on_hand || 0) - item.quantity);
+        } else {
+          product.stock = Math.max(0, parseFloat(product.stock || 0) - item.quantity);
+        }
+      }
+      try { localStorage.setItem('pos_products_cache', JSON.stringify(next)); } catch {}
+      return next;
+    });
   }, []);
 
   // ── Sync queued offline sales once back online ────────────
@@ -68,19 +105,52 @@ export default function POSMainScreen({
         if (data.success) {
           await markSynced(entry.offlineId);
           await removeQueuedSale(entry.offlineId);
+        } else {
+          // The server actually processed this request and said no —
+          // most commonly real stock ran out from under the optimistic
+          // local estimate (e.g. another terminal sold the last units
+          // while this one was offline). That's a genuine business
+          // problem, not a network hiccup: retrying it automatically
+          // on every future reconnect would just fail again forever
+          // while looking, in the UI, identical to "still waiting for
+          // a connection." Stop auto-retrying this one and flag it for
+          // a human to actually look at.
+          await markFailed(entry.offlineId, data.message || 'Sale was rejected by the server');
         }
-        // A failed sync (e.g. stock no longer available) stays queued
-        // rather than being silently dropped — surfaced via pendingSync.
       } catch {
         break; // still offline or server unreachable — stop for now
       }
     }
     refreshPendingCount();
+    refreshFailedSales();
     setSyncing(false);
-  }, [apiBase, token, refreshPendingCount]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [apiBase, token, refreshPendingCount, refreshFailedSales]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Re-queues a specific failed sale for another sync attempt (e.g.
+  // after a manager has restocked the item) without waiting for the
+  // next full online/offline cycle.
+  const handleRetryFailed = async (offlineId) => {
+    await clearFailedFlag(offlineId);
+    refreshFailedSales();
+    refreshPendingCount();
+    syncOfflineSales();
+  };
+
+  // Permanently gives up on a failed offline sale — the server never
+  // recorded it and never will. The local stock estimate already
+  // reflects it being sold, so discarding doesn't restore that
+  // quantity; a manager who discards this should reconcile stock
+  // manually if the sale truly didn't happen.
+  const handleDiscardFailed = async (offlineId) => {
+    if (!window.confirm('Discard this failed sale permanently? It was never recorded on the server — this cannot be undone.')) return;
+    await removeQueuedSale(offlineId);
+    refreshFailedSales();
+    refreshPendingCount();
+  };
 
   useEffect(() => {
     refreshPendingCount();
+    refreshFailedSales();
     const handleOnline  = () => { setIsOnline(true); syncOfflineSales(); };
     const handleOffline = () => setIsOnline(false);
     window.addEventListener('online', handleOnline);
@@ -90,7 +160,7 @@ export default function POSMainScreen({
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, [syncOfflineSales, refreshPendingCount]);
+  }, [syncOfflineSales, refreshPendingCount, refreshFailedSales]);
 
   // ── Load products ────────────────────────────────────────
   const loadProducts = useCallback(async () => {
@@ -284,6 +354,7 @@ export default function POSMainScreen({
     // No point even trying the network if we already know we're offline.
     if (!navigator.onLine) {
       await queueOfflineSale(payload);
+      applyOptimisticStockDecrement(cart);
       refreshPendingCount();
       setLastSale({
         saleNumber: 'OFFLINE (pending sync)', totalAmount: total,
@@ -307,6 +378,7 @@ export default function POSMainScreen({
       // The request never reached the server — genuinely offline
       // (or the server is down), not a rejected sale. Queue it.
       await queueOfflineSale(payload);
+      applyOptimisticStockDecrement(cart);
       refreshPendingCount();
       setLastSale({
         saleNumber: 'OFFLINE (pending sync)', totalAmount: total,
@@ -409,6 +481,14 @@ export default function POSMainScreen({
               fontSize:11, fontWeight:700, display:'flex', alignItems:'center', gap:6 }}>
               {!isOnline ? '⚠ Offline' : syncing ? '⟳ Syncing…' : `⏳ ${pendingSync} sale${pendingSync!==1?'s':''} pending sync`}
             </div>
+          )}
+          {failedSyncCount > 0 && (
+            <button onClick={() => setShowFailedSync(true)}
+              style={{ padding:'6px 12px', borderRadius:8, flexShrink:0, border:'none', cursor:'pointer',
+                background:'rgba(224,92,92,.25)', color:'#ff8080',
+                fontSize:11, fontWeight:700, display:'flex', alignItems:'center', gap:6, fontFamily:'sans-serif' }}>
+              ⚠ {failedSyncCount} sale{failedSyncCount!==1?'s':''} failed to sync — review
+            </button>
           )}
           <div style={{ fontSize:12, color:'rgba(255,255,255,.6)',
             textAlign:'right', flexShrink:0 }}>
@@ -561,6 +641,62 @@ export default function POSMainScreen({
           cashier={cashier}
           onSessionClosed={onCloseShift}
           onCancel={() => setShowShiftClose(false)}/>
+      )}
+
+      {/* Failed Offline Sales Review */}
+      {showFailedSync && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(13,27,42,.6)',
+          display:'flex', alignItems:'center', justifyContent:'center', zIndex:9999, padding:20 }}
+          onClick={e => e.target===e.currentTarget && setShowFailedSync(false)}>
+          <div style={{ background:'white', borderRadius:14, width:'100%', maxWidth:560,
+            maxHeight:'85vh', overflow:'auto', boxShadow:'0 20px 60px rgba(13,27,42,.25)' }}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between',
+              padding:'18px 24px', borderBottom:'1px solid #e2e8f0' }}>
+              <span style={{ fontSize:16, fontWeight:700 }}>Failed Offline Sales</span>
+              <button onClick={() => setShowFailedSync(false)}
+                style={{ background:'none', border:'none', fontSize:22, color:'#6b7fa3',
+                  cursor:'pointer', lineHeight:1 }}>×</button>
+            </div>
+            <div style={{ padding:24 }}>
+              <p style={{ fontSize:12.5, color:'#6b7fa3', marginBottom:16 }}>
+                These sales were made while offline but rejected by the server once reconnected —
+                most often because real stock ran out from under the estimate this terminal was
+                showing (e.g. another till sold the last units in the meantime). They will not
+                retry automatically.
+              </p>
+              {failedSales.length === 0 ? (
+                <div style={{ textAlign:'center', padding:30, color:'#6b7fa3', fontSize:13 }}>Nothing to review.</div>
+              ) : failedSales.map(entry => (
+                <div key={entry.offlineId} style={{ border:'1px solid #e2e8f0', borderRadius:10,
+                  padding:14, marginBottom:12 }}>
+                  <div style={{ display:'flex', justifyContent:'space-between', marginBottom:6 }}>
+                    <span style={{ fontWeight:700, fontSize:13 }}>{fmtCur(entry.payload.items?.reduce((s,i)=>s+i.unitPrice*i.quantity,0) || 0)}</span>
+                    <span style={{ fontSize:11, color:'#6b7fa3' }}>{new Date(entry.queuedAt).toLocaleString()}</span>
+                  </div>
+                  <div style={{ fontSize:12, color:'#6b7fa3', marginBottom:8 }}>
+                    {entry.payload.items?.map(i => `${i.quantity}× item #${i.productId}`).join(', ')}
+                  </div>
+                  <div style={{ background:'#fff5f5', border:'1px solid #fca5a5', borderRadius:7,
+                    padding:'8px 10px', fontSize:11.5, color:'#c04040', marginBottom:10 }}>
+                    ⚠️ {entry.lastError}
+                  </div>
+                  <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+                    <button onClick={() => handleDiscardFailed(entry.offlineId)}
+                      style={{ padding:'6px 14px', borderRadius:7, border:'1px solid #e2e8f0',
+                        background:'white', color:'#6b7fa3', fontSize:11.5, fontWeight:600, cursor:'pointer' }}>
+                      Discard
+                    </button>
+                    <button onClick={() => handleRetryFailed(entry.offlineId)}
+                      style={{ padding:'6px 14px', borderRadius:7, border:'1px solid #1e6bbd',
+                        background:'none', color:'#1e6bbd', fontSize:11.5, fontWeight:600, cursor:'pointer' }}>
+                      Retry Now
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

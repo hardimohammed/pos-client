@@ -25,8 +25,13 @@ export async function queueOfflineSale(payload) {
   return offlineId;
 }
 
+// Excludes entries already flagged failed — those stopped being
+// retried automatically (see markFailed below) and need a human to
+// look at them, not another silent replay attempt every time the
+// connection blips back on.
 export async function getUnsyncedSales() {
-  return offlineDb.queuedSales.where('synced').equals(0).toArray();
+  const all = await offlineDb.queuedSales.where('synced').equals(0).toArray();
+  return all.filter(e => !e.failed);
 }
 
 export async function markSynced(offlineId) {
@@ -38,5 +43,35 @@ export async function removeQueuedSale(offlineId) {
 }
 
 export async function unsyncedCount() {
-  return offlineDb.queuedSales.where('synced').equals(0).count();
+  const all = await offlineDb.queuedSales.where('synced').equals(0).toArray();
+  return all.filter(e => !e.failed).length;
+}
+
+// A sale the server explicitly rejected (most commonly: real stock
+// ran out from under it, e.g. another terminal sold the last units
+// while this one was offline) is a genuine business problem, not a
+// transient network hiccup — retrying it automatically would just
+// fail again forever while looking identical to "still waiting for
+// connectivity" in the UI. Flag it separately so it stops being
+// retried and surfaces for a human to actually look at.
+export async function markFailed(offlineId, errorMessage) {
+  await offlineDb.queuedSales.update(offlineId, {
+    failed: 1, lastError: errorMessage, failedAt: new Date().toISOString(),
+  });
+}
+
+export async function getFailedSales() {
+  const all = await offlineDb.queuedSales.where('synced').equals(0).toArray();
+  return all.filter(e => e.failed);
+}
+
+export async function failedCount() {
+  const all = await offlineDb.queuedSales.where('synced').equals(0).toArray();
+  return all.filter(e => e.failed).length;
+}
+
+// Lets a manager retry a specific failed sale by hand (e.g. after
+// restocking) without it being swept up in the next automatic sync.
+export async function clearFailedFlag(offlineId) {
+  await offlineDb.queuedSales.update(offlineId, { failed: 0, lastError: null, failedAt: null });
 }
