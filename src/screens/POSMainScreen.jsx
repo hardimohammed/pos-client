@@ -29,7 +29,7 @@ const variantPrice = (product, variant) => {
 };
 
 export default function POSMainScreen({
-  apiBase, token, cashier, session, socket, onCloseShift,
+  apiBase, token, cashier, session, socket, onCloseShift, onLogout,
 }) {
   const [products,      setProducts]      = useState([]);
   const [categories,    setCategories]    = useState([]);
@@ -523,6 +523,23 @@ export default function POSMainScreen({
               fontSize:12, cursor:'pointer',
               fontFamily:'sans-serif' }}>
             Close Shift
+          </button>
+          {/* Separate from Close Shift — that's a cash-reconciliation
+              step for ending the day, not a quick way to hand the
+              terminal to a different cashier. This just signs out of
+              the browser; the shift stays open server-side and picks
+              back up automatically next time this cashier logs in. */}
+          <button
+            onClick={() => {
+              if (window.confirm('Sign out of this terminal? Your shift stays open and will resume next time you log in.'))
+                onLogout();
+            }}
+            style={{ padding:'8px 14px', borderRadius:8,
+              border:'1px solid rgba(255,255,255,.2)',
+              background:'none', color:'rgba(255,255,255,.7)',
+              fontSize:12, cursor:'pointer',
+              fontFamily:'sans-serif' }}>
+            Logout
           </button>
         </div>
 

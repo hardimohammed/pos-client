@@ -146,6 +146,24 @@ export default function POSApp() {
     setScreen('login');
   };
 
+  // Signs out of the browser only — doesn't touch the shift/session
+  // server-side, so whoever's mid-shift just resumes it next time they
+  // log back in (same as handleShiftClose, minus the actual shift-close
+  // API call). Used by both the "Cancel" button on the shift-open
+  // screen and "Logout" on the main POS screen — previously "Cancel"
+  // only switched which screen was showing without clearing the stored
+  // token, so a page refresh right after would silently pull the
+  // previous cashier's session right back.
+  const handleLogout = () => {
+    setSession(null);
+    setCashier(null);
+    setAuthToken(null);
+    setOrgId(null);
+    localStorage.removeItem('pos_token');
+    localStorage.removeItem('pos_org_id');
+    setScreen('login');
+  };
+
   return (
     <div style={{ height:'100vh', overflow:'hidden',
       fontFamily:'system-ui, sans-serif',
@@ -186,7 +204,7 @@ export default function POSApp() {
           token={authToken}
           cashier={cashier}
           onSessionOpened={handleSessionOpened}
-          onCancel={() => setScreen('login')}/>
+          onCancel={handleLogout}/>
       )}
 
       {screen === 'pos' && (
@@ -196,7 +214,8 @@ export default function POSApp() {
           cashier={cashier}
           session={session}
           socket={socket}
-          onCloseShift={handleShiftClose}/>
+          onCloseShift={handleShiftClose}
+          onLogout={handleLogout}/>
       )}
     </div>
   );
