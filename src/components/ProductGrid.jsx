@@ -168,6 +168,27 @@ function VariantPicker({ product, onSelect, onClose }) {
 const filesBase = (apiBase) =>
   (apiBase || '').replace(/\/api\/v\d+\/?$/, '');
 
+// A CSS background:url() (the old approach here) has no equivalent
+// to <img onError> — a deleted file or expired token just rendered
+// as a blank box instead of falling back to the package icon, unlike
+// accounting-client's own product thumbnail component. This mirrors
+// that one so a cashier sees the same graceful fallback either way.
+function ProductThumb({ src, apiBase, token }) {
+  const [failed, setFailed] = useState(false);
+  const showImg = src && !failed;
+  return (
+    <>
+      {showImg && (
+        <img src={`${filesBase(apiBase)}${src}?token=${token}`} alt=""
+          onError={() => setFailed(true)}
+          style={{ position:'absolute', inset:0, width:'100%', height:'100%',
+            objectFit:'cover' }}/>
+      )}
+      {!showImg && <div style={{ fontSize:36 }}>📦</div>}
+    </>
+  );
+}
+
 export default function ProductGrid({ products, loading, onAddToCart, apiBase, token }) {
   const [variantProduct, setVariantProduct] = useState(null);
 
@@ -241,14 +262,10 @@ export default function ProductGrid({ products, loading, onAddToCart, apiBase, t
 
               {/* Product image */}
               <div style={{ height:120,
-                background: product.image_url
-                  ? `url(${filesBase(apiBase)}${product.image_url}?token=${token}) center/cover`
-                  : 'linear-gradient(135deg,#e8f4fd,#d1e9f9)',
+                background:'linear-gradient(135deg,#e8f4fd,#d1e9f9)',
                 display:'flex', alignItems:'center',
                 justifyContent:'center', position:'relative' }}>
-                {!product.image_url && (
-                  <div style={{ fontSize:36 }}>📦</div>
-                )}
+                <ProductThumb src={product.image_url} apiBase={apiBase} token={token}/>
                 {isOut && (
                   <div style={{ position:'absolute',
                     inset:0, background:'rgba(0,0,0,.5)',
