@@ -14,8 +14,14 @@ offlineDb.version(1).stores({
   queuedSales: 'offlineId, queuedAt, synced',
 });
 
-export async function queueOfflineSale(payload) {
-  const offlineId = crypto.randomUUID();
+// Accepts an already-generated offlineId (POSMainScreen creates one
+// upfront for every checkout attempt, live or not, and reuses it here
+// if the live attempt fails) rather than always minting a fresh one —
+// reusing it is what lets the server recognize a retried sale as the
+// same one instead of creating a second sale, and for mobile money, a
+// second real Paystack charge for it.
+export async function queueOfflineSale(payload, existingOfflineId = null) {
+  const offlineId = existingOfflineId || crypto.randomUUID();
   await offlineDb.queuedSales.add({
     offlineId,
     payload: { ...payload, isOfflineSale: true, offlineId },

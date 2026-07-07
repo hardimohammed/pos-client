@@ -328,6 +328,19 @@ export default function POSMainScreen({
 
   // ── Complete sale ─────────────────────────────────────────
   const handleSaleComplete = async (paymentData) => {
+    // Generated once, up front, and carried through every attempt at
+    // recording *this* checkout — including the very first live one,
+    // not just an offline-queue fallback. If the live fetch's request
+    // reaches the server (sale created, stock deducted, and for
+    // mobile money a real Paystack charge fired) but its response is
+    // lost to a network drop before it gets back here, the code below
+    // used to treat that as "never happened" and queue a fresh retry
+    // with a brand-new id — which the server had no way to link back
+    // to the first attempt, so it just created a second sale (and, on
+    // mobile money, charged the customer twice). Reusing the same id
+    // for the retry lets the server's offlineId dedup recognize it as
+    // the same sale and hand back the original instead of duplicating it.
+    const clientSaleId = crypto.randomUUID();
     const payload = {
       sessionId:     session.id,
       customerId:    paymentData.customerId || null,
@@ -349,11 +362,12 @@ export default function POSMainScreen({
       notes:         paymentData.notes,
       momoPhone:     paymentData.momoPhone || undefined,
       momoProvider:  paymentData.momoProvider || undefined,
+      offlineId:     clientSaleId,
     };
 
     // No point even trying the network if we already know we're offline.
     if (!navigator.onLine) {
-      await queueOfflineSale(payload);
+      await queueOfflineSale(payload, clientSaleId);
       applyOptimisticStockDecrement(cart);
       refreshPendingCount();
       setLastSale({
@@ -375,9 +389,10 @@ export default function POSMainScreen({
       });
       data = await res.json();
     } catch (networkErr) {
-      // The request never reached the server — genuinely offline
-      // (or the server is down), not a rejected sale. Queue it.
-      await queueOfflineSale(payload);
+      // The request may or may not have actually reached the server —
+      // that ambiguity is exactly why clientSaleId is reused rather
+      // than regenerated here.
+      await queueOfflineSale(payload, clientSaleId);
       applyOptimisticStockDecrement(cart);
       refreshPendingCount();
       setLastSale({
