@@ -32,6 +32,16 @@ export default defineConfig({
       workbox: {
         navigateFallback: '/index.html',
         globPatterns: ['**/*.{js,css,html,svg,png,ico}'],
+        // jsPDF (dynamically imported only inside ShiftManager's Export
+        // PDF button — see that file) drags in html2canvas and DOMPurify
+        // as its own dependencies, ~530KB combined, purely for a feature
+        // most shifts never touch. Being a dynamic import already keeps
+        // it out of the initial page load; excluding it here too keeps
+        // it out of the mandatory install-time precache, so a cashier
+        // isn't waiting on a PDF library download before the terminal is
+        // offline-safe. It's still fetched and cached the normal way the
+        // first time someone actually exports a PDF while online.
+        globIgnores: ['**/jspdf*.js', '**/html2canvas*.js', '**/purify*.js', '**/index.es*.js', '**/typeof*.js'],
       },
       manifest: {
         name: 'FinSuite POS',

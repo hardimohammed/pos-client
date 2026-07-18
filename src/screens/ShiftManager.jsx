@@ -3,7 +3,6 @@
 //  Open and close cashier shifts with float management
 // ============================================================
 import { useState, useEffect } from 'react';
-import jsPDF from 'jspdf';
 
 export default function ShiftManager({
   mode, session, apiBase, token, cashier,
@@ -101,10 +100,17 @@ export default function ShiftManager({
   const fmtCur = (n) =>
     `GH₵ ${parseFloat(n||0).toFixed(2)}`;
 
-  const handleExportPdf = () => {
+  const handleExportPdf = async () => {
     if (!summary) return;
     setExporting(true);
     try {
+      // jsPDF statically pulls in html2canvas (used only for its .html()
+      // rendering path, which this text-only summary never calls) — that's
+      // ~220KB combined that has no business being in the app's initial
+      // load or PWA precache set for a screen most shifts never visit.
+      // Loaded on demand, only once a cashier actually clicks Export.
+      const { default: jsPDF } = await import('jspdf');
+
       const cashierName = `${cashier?.first_name || ''} ${cashier?.last_name || ''}`.trim() || 'Cashier';
       const variance = parseFloat(summary.variance || 0);
       const now = new Date();
