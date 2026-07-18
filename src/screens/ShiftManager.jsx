@@ -2,7 +2,7 @@
 //  pos-client/src/screens/ShiftManager.jsx
 //  Open and close cashier shifts with float management
 // ============================================================
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import jsPDF from 'jspdf';
 
 export default function ShiftManager({
@@ -15,11 +15,29 @@ export default function ShiftManager({
   const [loading,  setLoading]  = useState(false);
   const [summary,  setSummary]  = useState(null);
   const [exporting,setExporting]= useState(false);
+  // Set when the server rejects a close because the counted amount is
+  // off by more than the org's configured threshold and no note was
+  // given — not a hard block, just requires an explanation first.
+  const [needsNote, setNeedsNote] = useState(false);
+  // session (the prop) is set once at open/login and never updated
+  // as sales/refunds happen — every sale/refund updates the real
+  // totals in pos_sessions server-side, but this screen never saw
+  // it. Refetch on open so the close preview shows what's actually
+  // in the database instead of stale/zeroed numbers.
+  const [liveSession, setLiveSession] = useState(session);
 
   const authH = {
     Authorization:  `Bearer ${token}`,
     'Content-Type': 'application/json',
   };
+
+  useEffect(() => {
+    if (mode !== 'close' || !session?.id) return;
+    fetch(`${apiBase}/pos/session/current`, { headers: authH })
+      .then(res => res.json())
+      .then(data => { if (data.success) setLiveSession(data.data); })
+      .catch(() => {}); // keep the stale prop as a fallback if this fails
+  }, [mode, session?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleOpen = async () => {
     if (!float && float !== '0')
@@ -64,8 +82,16 @@ export default function ShiftManager({
         }
       );
       const data = await res.json();
-      if (!data.success)
+      if (!data.success) {
+        // Not a hard block — the server still lets this close, it just
+        // wants a note first. Doesn't close the shift, so re-clicking
+        // Close Shift after filling in the note (already on screen,
+        // just below the amount) resubmits and goes through normally.
+        if (data.errors?.code === 'VARIANCE_NOTE_REQUIRED') {
+          setNeedsNote(true);
+        }
         throw new Error(data.message || 'Failed to close shift');
+      }
       setSummary(data.data);
     } catch (err) {
       alert(err.message);
@@ -285,19 +311,19 @@ export default function ShiftManager({
           </div>
         ) : (
           <div>
-            {session && (
+            {liveSession && (
               <div style={{ background:'#f8fafc',
                 borderRadius:12, padding:14,
                 marginBottom:20, fontSize:13 }}>
                 {[
                   { label:'Opening Float',
-                    value:fmtCur(session.opening_float) },
+                    value:fmtCur(liveSession.opening_float) },
                   { label:'Cash Sales',
-                    value:fmtCur(session.total_cash_sales) },
+                    value:fmtCur(liveSession.total_cash_sales) },
                   { label:'Transactions',
-                    value:session.total_transactions },
+                    value:liveSession.total_transactions },
                   { label:'Total Sales',
-                    value:fmtCur(session.total_sales),
+                    value:fmtCur(liveSession.total_sales),
                     bold:true },
                 ].map((r,i) => (
                   <div key={i} style={{ display:'flex',
@@ -333,12 +359,20 @@ export default function ShiftManager({
                 textAlign:'center', outline:'none',
                 boxSizing:'border-box',
                 marginBottom:12 }}/>
+            {needsNote && (
+              <div style={{ background:'#fff5f5', border:'1px solid #fca5a5',
+                borderRadius:8, padding:'8px 12px', marginBottom:10,
+                fontSize:12, color:'#c04040', fontWeight:600 }}>
+                This amount is off by more than usual — add a note explaining
+                what happened, then close the shift again.
+              </div>
+            )}
             <textarea
-              placeholder="Notes (optional)"
+              placeholder={needsNote ? 'Note required — explain the difference' : 'Notes (optional)'}
               value={notes}
-              onChange={e => setNotes(e.target.value)}
+              onChange={e => { setNotes(e.target.value); if (needsNote) setNeedsNote(false); }}
               style={{ width:'100%', padding:12,
-                border:'1px solid #e2e8f0',
+                border: needsNote ? '2px solid #e05c5c' : '1px solid #e2e8f0',
                 borderRadius:10, fontSize:13,
                 fontFamily:'sans-serif', resize:'none',
                 height:60, outline:'none',

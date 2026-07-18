@@ -22,9 +22,6 @@ export default function POSLoginScreen({ apiBase, onSuccess }) {
       });
       const data = await res.json();
 
-      // Debug: log the full response shape
-      console.log('Auth response:', JSON.stringify(data));
-
       if (!data.success)
         throw new Error(data.message || 'Login failed');
 
@@ -33,10 +30,14 @@ export default function POSLoginScreen({ apiBase, onSuccess }) {
       const token    = payload.token || payload.accessToken;
       const user     = payload.user  || payload;
 
-      // Extract org info — try multiple possible locations
+      // Extract org info — try multiple possible locations. No
+      // fallback to a literal org id here: a wrong guess would join
+      // this terminal to a different org's real-time socket room
+      // silently (see POSApp.jsx's handleAuthSuccess, which now
+      // refuses to continue if this ends up empty).
       const org = payload.organization
         || payload.org
-        || { id: user?.org_id || user?.orgId || 1 };
+        || (user?.org_id || user?.orgId ? { id: user.org_id || user.orgId } : null);
 
       if (!token) throw new Error('No token in response');
 

@@ -3,6 +3,19 @@
 // ============================================================
 import { useRef } from 'react';
 
+// Cart items never carry a lineTotal field (only unitPrice/quantity/
+// discountPct — see CartSidebar's own gross/discAmt math), so both
+// the printed receipt and this WhatsApp/email text previously fell
+// back to gross unitPrice*quantity and silently ignored any per-item
+// discount — the line items would sum to more than the receipt's own
+// stated Subtotal/Total whenever a discount was applied. Same formula
+// as CartSidebar so the two agree.
+const lineNetTotal = (item) => {
+  const gross   = (item.unitPrice || 0) * (item.quantity || 0);
+  const discAmt = gross * ((item.discountPct || 0) / 100);
+  return gross - discAmt;
+};
+
 // Plain-text receipt summary shared by WhatsApp/Email sharing
 const buildReceiptText = (sale, fmtCur, cashierName) => {
   const lines = [
@@ -12,7 +25,7 @@ const buildReceiptText = (sale, fmtCur, cashierName) => {
     cashierName ? `Cashier: ${cashierName}` : null,
     '',
     ...(sale.items || []).map(item =>
-      `${item.quantity} x ${item.name}${item.variantLabel ? ` (${item.variantLabel})` : ''} - ${fmtCur(item.lineTotal || item.unitPrice * item.quantity)}`
+      `${item.quantity} x ${item.name}${item.variantLabel ? ` (${item.variantLabel})` : ''} - ${fmtCur(lineNetTotal(item))}`
     ),
     '',
     sale.discountAmount > 0 ? `Discount: -${fmtCur(sale.discountAmount)}` : null,
@@ -137,8 +150,7 @@ export default function ReceiptModal({ sale, fmtCur, cashier, onClose }) {
                 </span>
                 <span style={{ fontWeight:700,
                   color:'#1a2740' }}>
-                  {fmtCur(item.lineTotal
-                    || item.unitPrice * item.quantity)}
+                  {fmtCur(lineNetTotal(item))}
                 </span>
               </div>
             </div>

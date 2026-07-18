@@ -1,14 +1,19 @@
 // ============================================================
 //  pos-client/src/components/RefundModal.jsx
-//  Search a completed sale by receipt number, select full or
-//  partial line items to refund, require a reason, confirm.
+//  Search a sale by receipt number. A completed sale goes through
+//  the usual full/partial item refund. A sale that's still pending
+//  or declined (a mobile money/card charge that never confirmed —
+//  or never even got that far) has nothing to refund, since no
+//  payment was ever actually received; it can only be voided,
+//  reversing the stock deduction, GL entry, and mirrored invoice so
+//  a cashier can safely re-ring the same items another way.
 // ============================================================
 import { useState } from 'react';
 
 export default function RefundModal({ apiBase, token, fmtCur, onClose, onRefunded }) {
   const authH = { Authorization: `Bearer ${token}` };
 
-  const [step,        setStep]        = useState('search'); // search | select
+  const [step,        setStep]        = useState('search'); // search | select | void
   const [query,       setQuery]       = useState('');
   const [searching,   setSearching]   = useState(false);
   const [results,     setResults]     = useState([]);
@@ -45,7 +50,13 @@ export default function RefundModal({ apiBase, token, fmtCur, onClose, onRefunde
       const s = data.data;
 
       if (s.payment_status !== 'completed') {
-        setError(`This sale is "${s.payment_status}" and cannot be refunded.`);
+        if (s.notes && s.notes.includes('Voided:')) {
+          setError('This sale has already been voided.');
+          setSearching(false);
+          return;
+        }
+        setSale(s);
+        setStep('void');
         setSearching(false);
         return;
       }
@@ -107,6 +118,25 @@ export default function RefundModal({ apiBase, token, fmtCur, onClose, onRefunde
     } finally { setSubmitting(false); }
   };
 
+  const handleVoid = async () => {
+    if (!reason.trim()) return setError('A reason is required to void a sale');
+    setSubmitting(true);
+    setError('');
+    try {
+      const res  = await fetch(`${apiBase}/pos/sales/${sale.id}/void`, {
+        method:  'POST',
+        headers: { ...authH, 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ reason: reason.trim() }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.message || 'Void failed');
+      onRefunded?.(data.data);
+      onClose();
+    } catch (err) {
+      setError(err.message || 'Void failed');
+    } finally { setSubmitting(false); }
+  };
+
   return (
     <div style={{ position:'fixed', inset:0,
       background:'rgba(13,27,42,.7)', display:'flex',
@@ -121,7 +151,7 @@ export default function RefundModal({ apiBase, token, fmtCur, onClose, onRefunde
           display:'flex', justifyContent:'space-between',
           alignItems:'center' }}>
           <div style={{ color:'white', fontWeight:800, fontSize:16 }}>
-            {step === 'search' ? 'Find Sale to Refund' : `Refund ${sale?.sale_number}`}
+            {step === 'search' ? 'Find Sale' : step === 'void' ? `Void ${sale?.sale_number}` : `Refund ${sale?.sale_number}`}
           </div>
           <button onClick={onClose}
             style={{ background:'none', border:'none',
@@ -267,6 +297,56 @@ export default function RefundModal({ apiBase, token, fmtCur, onClose, onRefunde
                     cursor: (submitting || !refundLines.length) ? 'not-allowed' : 'pointer',
                     fontFamily:'sans-serif' }}>
                   {submitting ? 'Processing…' : `Refund ${fmtCur(refundEstimate)}`}
+                </button>
+              </div>
+            </>
+          )}
+
+          {/* ── Step: void (sale never actually completed) ─────── */}
+          {step === 'void' && sale && (
+            <>
+              <div style={{ background:'#fffbeb', border:'1px solid #fcd34d',
+                borderRadius:8, padding:'12px 14px', marginBottom:16,
+                fontSize:12, color:'#92400e' }}>
+                This sale is <b>{sale.payment_status}</b> — no payment was ever confirmed
+                for it, so there's nothing to refund. Voiding restores the stock it
+                deducted and cancels its accounting entries, so you can safely ring up
+                the same items again under a different payment method.
+              </div>
+
+              <div style={{ padding:'10px 0', borderBottom:'1px solid #f0f2f5', marginBottom:12 }}>
+                <div style={{ fontWeight:700, fontSize:13 }}>{sale.sale_number}</div>
+                <div style={{ fontSize:12, color:'#6b7fa3' }}>
+                  {sale.payment_method?.replace('_',' ')} · {fmtCur(sale.total_amount)}
+                </div>
+              </div>
+
+              <label style={{ display:'block', fontSize:11, fontWeight:600,
+                color:'#1a2740', marginBottom:6 }}>
+                Reason for voiding *
+              </label>
+              <textarea rows={3} value={reason}
+                onChange={e => setReason(e.target.value)}
+                placeholder="e.g. Mobile money charge was declined"
+                style={{ width:'100%', padding:'10px 12px', border:'1.5px solid #e2e8f0',
+                  borderRadius:8, fontSize:13, fontFamily:'sans-serif',
+                  outline:'none', resize:'vertical', boxSizing:'border-box' }}/>
+
+              <div style={{ display:'flex', gap:12, marginTop:20 }}>
+                <button onClick={() => { setStep('search'); setSale(null); setError(''); setReason(''); }}
+                  style={{ flex:1, padding:12, border:'1px solid #e2e8f0',
+                    background:'white', borderRadius:10, fontSize:13,
+                    cursor:'pointer', fontFamily:'sans-serif' }}>
+                  Back
+                </button>
+                <button onClick={handleVoid} disabled={submitting}
+                  style={{ flex:2, padding:12,
+                    background: submitting ? '#6b7fa3' : '#e05c5c',
+                    color:'white', border:'none', borderRadius:10, fontSize:14,
+                    fontWeight:700,
+                    cursor: submitting ? 'not-allowed' : 'pointer',
+                    fontFamily:'sans-serif' }}>
+                  {submitting ? 'Processing…' : 'Void Sale'}
                 </button>
               </div>
             </>

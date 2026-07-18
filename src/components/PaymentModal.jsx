@@ -92,7 +92,11 @@ export default function PaymentModal({
   const splitTotal     = splitLegs.reduce((s, l) => s + (parseFloat(l.amount) || 0), 0);
   const splitRemaining = total - splitTotal;
   const splitValid     = Math.abs(splitRemaining) < 0.01
-    && splitLegs.every(l => (parseFloat(l.amount) || 0) > 0);
+    && splitLegs.every(l => (parseFloat(l.amount) || 0) > 0)
+    // A mobile_money leg needs a real phone number, same requirement
+    // as the non-split flow — it's an actual Paystack charge now, not
+    // just a trust-based line item.
+    && splitLegs.every(l => l.method !== 'mobile_money' || (l.momoPhone || '').length >= 10);
 
   const isReady = splitMode
     ? splitValid
@@ -119,7 +123,10 @@ export default function PaymentModal({
     try {
       await onComplete(splitMode ? {
         method: 'split',
-        payments: splitLegs.map(l => ({ method: l.method, amount: parseFloat(l.amount) || 0 })),
+        payments: splitLegs.map(l => ({
+          method: l.method, amount: parseFloat(l.amount) || 0,
+          ...(l.method === 'mobile_money' ? { momoPhone: l.momoPhone, momoProvider: l.momoProvider || 'mtn' } : {}),
+        })),
         amountTendered: total,
         changeGiven:    0,
         customerId:     customer?.id || null,
@@ -215,27 +222,56 @@ export default function PaymentModal({
           {splitMode && (
             <div style={{ marginBottom:4 }}>
               {splitLegs.map((leg, i) => (
-                <div key={i} style={{ display:'flex', gap:8,
-                  marginBottom:10, alignItems:'center' }}>
-                  <select value={leg.method}
-                    onChange={e => updSplitLeg(i, 'method', e.target.value)}
-                    style={{ padding:'12px 10px', borderRadius:10,
-                      border:'2px solid #e2e8f0', fontSize:13,
-                      fontWeight:600, color:'#1a2740',
-                      background:'white', flex:'0 0 150px' }}>
-                    {METHODS.map(m => (
-                      <option key={m.id} value={m.id}>{m.icon} {m.label}</option>
-                    ))}
-                  </select>
-                  <input type="number" min="0" step="0.01"
-                    placeholder="Amount"
-                    value={leg.amount}
-                    onChange={e => updSplitLeg(i, 'amount', e.target.value)}
-                    style={{ flex:1, padding:'12px 14px',
-                      border:'2px solid #e2e8f0', borderRadius:10,
-                      fontSize:16, fontFamily:'monospace',
-                      fontWeight:700, textAlign:'right',
-                      outline:'none', boxSizing:'border-box' }}/>
+                <div key={i} style={{ marginBottom:10 }}>
+                  <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+                    <select value={leg.method}
+                      onChange={e => updSplitLeg(i, 'method', e.target.value)}
+                      style={{ padding:'12px 10px', borderRadius:10,
+                        border:'2px solid #e2e8f0', fontSize:13,
+                        fontWeight:600, color:'#1a2740',
+                        background:'white', flex:'0 0 150px' }}>
+                      {METHODS.map(m => (
+                        <option key={m.id} value={m.id}>{m.icon} {m.label}</option>
+                      ))}
+                    </select>
+                    <input type="number" min="0" step="0.01"
+                      placeholder="Amount"
+                      value={leg.amount}
+                      onChange={e => updSplitLeg(i, 'amount', e.target.value)}
+                      style={{ flex:1, padding:'12px 14px',
+                        border:'2px solid #e2e8f0', borderRadius:10,
+                        fontSize:16, fontFamily:'monospace',
+                        fontWeight:700, textAlign:'right',
+                        outline:'none', boxSizing:'border-box' }}/>
+                  </div>
+                  {/* A mobile money leg is a real, remote Paystack charge
+                      just like the non-split flow — it used to be
+                      accepted on the cashier's say-so alone, with no
+                      phone number and no charge ever attempted, yet
+                      still counted toward completing the whole sale. */}
+                  {leg.method === 'mobile_money' && (
+                    <div style={{ display:'flex', gap:8, marginTop:8, paddingLeft:2 }}>
+                      <select value={leg.momoProvider || 'mtn'}
+                        onChange={e => updSplitLeg(i, 'momoProvider', e.target.value)}
+                        style={{ padding:'10px 8px', borderRadius:8,
+                          border:'2px solid #e2e8f0', fontSize:12,
+                          fontWeight:600, color:'#1a2740',
+                          background:'white', flex:'0 0 110px' }}>
+                        <option value="mtn">MTN</option>
+                        <option value="vod">Telecel</option>
+                        <option value="tgo">AirtelTigo</option>
+                      </select>
+                      <input type="tel"
+                        placeholder="Customer MoMo number, e.g. 0241234567"
+                        value={leg.momoPhone || ''}
+                        onChange={e => updSplitLeg(i, 'momoPhone', e.target.value)}
+                        style={{ flex:1, padding:'10px 12px',
+                          border: `2px solid ${(leg.momoPhone || '').length >= 10 ? '#e2e8f0' : '#fcd34d'}`,
+                          borderRadius:8, fontSize:13,
+                          fontFamily:'monospace', outline:'none',
+                          boxSizing:'border-box' }}/>
+                    </div>
+                  )}
                 </div>
               ))}
               <div style={{ display:'flex', justifyContent:'space-between',
