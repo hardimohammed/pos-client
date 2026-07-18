@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      # No test files exist in this app yet — build (including the
+      # PWA service-worker generation) is the meaningful gate for now.
+      # Add a test step here once real tests exist.
+      - name: Build
+        run: npm run build
