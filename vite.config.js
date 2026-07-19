@@ -50,6 +50,17 @@ export default defineConfig({
         display: 'standalone',
         background_color: '#0d1b2a',
         theme_color: '#1e6bbd',
+        // Without these, the manifest had zero icons — Chrome won't
+        // fire beforeinstallprompt (no "Add to Home Screen" banner)
+        // for a PWA missing at least a 192 and 512, and any install
+        // that does happen through other means falls back to a
+        // generic browser icon on the home screen. Real problem for a
+        // terminal explicitly meant to run as an installed, standalone
+        // app on a shop tablet, not a bookmarked tab.
+        icons: [
+          { src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
+          { src: '/icon-512.png', sizes: '512x512', type: 'image/png' },
+        ],
       },
     }),
   ],
