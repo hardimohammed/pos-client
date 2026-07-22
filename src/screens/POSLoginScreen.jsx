@@ -49,7 +49,7 @@ export default function POSLoginScreen({ apiBase, onSuccess }) {
   };
 
   return (
-    <div style={{ height:'100vh',
+    <div style={{ height:'100vh', position:'relative',
       background:'linear-gradient(135deg,#0d1b2a,#1a2f4a)',
       display:'flex', alignItems:'center',
       justifyContent:'center', padding:20 }}>
@@ -131,6 +131,11 @@ export default function POSLoginScreen({ apiBase, onSuccess }) {
           for faster access next time
         </div>
       </div>
+      <p style={{ position:'fixed', bottom:16, left:0, right:0,
+        zIndex:1, textAlign:'center', margin:0,
+        fontSize:11, color:'rgba(255,255,255,.5)' }}>
+        © {new Date().getFullYear()} FinSuite Pro. All rights reserved.
+      </p>
     </div>
   );
 }
